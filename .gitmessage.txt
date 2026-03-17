@@ -1,0 +1,11 @@
+type(scope): short summary
+
+# Why:
+#
+# What changed:
+#
+# Notes:
+#
+# Examples:
+# feat(api): add lead enrichment endpoint
+# fix(ui): keep filters when refreshing results
