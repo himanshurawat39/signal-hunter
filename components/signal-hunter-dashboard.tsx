@@ -5,16 +5,17 @@ import {
   AlertCircle,
   ArrowUpRight,
   LoaderCircle,
+  LogOut,
+  Mail,
   Radar,
   Search,
+  ShieldCheck,
   Sparkles,
   Target,
 } from "lucide-react";
-import {
-  FREE_PLAN_LIMITS,
-  FREE_PLAN_STORAGE_KEY,
-  PRICING_PLANS,
-} from "@/lib/pricing";
+import type { User } from "@supabase/supabase-js";
+import { PRICING_PLANS, type PlanId, getPlanDefinition } from "@/lib/pricing";
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type Lead = {
   title: string;
@@ -26,24 +27,39 @@ type Lead = {
   rationale: string;
 };
 
-type ApiResponse = {
+type UsageSnapshot = {
+  planId: PlanId;
+  dailyUsed: number;
+  dailyLimit: number | null;
+  dailyRemaining: number | null;
+  monthlyUsed: number;
+  monthlyLimit: number;
+  monthlyRemaining: number;
+  canSearch: boolean;
+};
+
+type Profile = {
+  id: string;
+  email: string | null;
+  plan: PlanId;
+};
+
+type AccountResponse = {
+  user: { id: string; email: string | null } | null;
+  profile?: Profile;
+  usage?: UsageSnapshot;
+  error?: string;
+};
+
+type SearchResponse = {
   leads: Lead[];
   query: string;
   provider: string;
   searchedPosts: number;
   matchMode?: "exact" | "related";
-};
-
-type ApiError = {
+  profile?: Profile;
+  usage?: UsageSnapshot;
   error?: string;
-};
-
-type FreeUsageState = {
-  dailyUsed: number;
-  monthlyUsed: number;
-  dailyRemaining: number;
-  monthlyRemaining: number;
-  limitReached: boolean;
 };
 
 const REQUEST_TIMEOUT_MS = 30000;
@@ -81,17 +97,14 @@ export function SignalHunterDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
-  const [freeUsage, setFreeUsage] = useState<FreeUsageState>({
-    dailyUsed: 0,
-    monthlyUsed: 0,
-    dailyRemaining: FREE_PLAN_LIMITS.dailySearches,
-    monthlyRemaining: FREE_PLAN_LIMITS.monthlySearches,
-    limitReached: false,
-  });
-
-  useEffect(() => {
-    setFreeUsage(readFreeUsage());
-  }, []);
+  const [email, setEmail] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
+  const [accountLoading, setAccountLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [usage, setUsage] = useState<UsageSnapshot | null>(null);
+  const [configMessage, setConfigMessage] = useState("");
 
   const stats = useMemo(
     () => [
@@ -102,23 +115,65 @@ export function SignalHunterDashboard() {
     [leads.length, provider, searchedPosts],
   );
 
+  useEffect(() => {
+    let mounted = true;
+    let cleanup = () => {};
+
+    const hydrate = async () => {
+      await loadAccount(mounted);
+
+      try {
+        const supabase = createSupabaseBrowserClient();
+        const {
+          data: { user: currentUser },
+        } = await supabase.auth.getUser();
+
+        if (mounted) {
+          setUser(currentUser ?? null);
+        }
+
+        const subscription = supabase.auth.onAuthStateChange((_event, session) => {
+          setUser(session?.user ?? null);
+          void loadAccount(true);
+        });
+
+        cleanup = () => subscription.data.subscription.unsubscribe();
+      } catch (caughtError) {
+        if (mounted) {
+          const message =
+            caughtError instanceof Error
+              ? caughtError.message
+              : "Supabase is not configured yet.";
+          setConfigMessage(message);
+          setAccountLoading(false);
+        }
+      }
+    };
+
+    void hydrate();
+
+    return () => {
+      mounted = false;
+      cleanup();
+    };
+  }, []);
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setError("");
+    setHasSearched(true);
 
-    const usage = readFreeUsage();
-    setFreeUsage(usage);
+    if (!user) {
+      setError("Sign in with Google or email to start searching.");
+      return;
+    }
 
-    if (usage.limitReached) {
-      setHasSearched(true);
-      setError(
-        `Free beta is capped at ${FREE_PLAN_LIMITS.dailySearches} searches per day and ${FREE_PLAN_LIMITS.monthlySearches} searches per month on this browser. Upgrade to keep prospecting.`,
-      );
+    if (usage && !usage.canSearch) {
+      setError(buildLimitMessage(usage));
       return;
     }
 
     setLoading(true);
-    setError("");
-    setHasSearched(true);
 
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -133,11 +188,16 @@ export function SignalHunterDashboard() {
         signal: controller.signal,
       });
 
-      const data = (await response.json()) as ApiResponse | ApiError;
+      const data = (await response.json()) as SearchResponse;
 
-      if (!response.ok || !("leads" in data)) {
-        const message = "error" in data ? data.error : undefined;
-        throw new Error(message || "Signal scan failed.");
+      if (!response.ok) {
+        if (data.usage) {
+          setUsage(data.usage);
+        }
+        if (data.profile) {
+          setProfile(data.profile);
+        }
+        throw new Error(data.error || "Signal scan failed.");
       }
 
       setLeads(data.leads);
@@ -145,7 +205,13 @@ export function SignalHunterDashboard() {
       setSearchedPosts(data.searchedPosts);
       setQuery(data.query);
       setMatchMode(data.matchMode || "exact");
-      setFreeUsage(incrementFreeUsage());
+      if (data.profile) {
+        setProfile(data.profile);
+      }
+      if (data.usage) {
+        setUsage(data.usage);
+      }
+      await loadAccount(true);
     } catch (caughtError) {
       const message =
         caughtError instanceof DOMException && caughtError.name === "AbortError"
@@ -160,11 +226,96 @@ export function SignalHunterDashboard() {
     }
   };
 
+  const handleGoogleLogin = async () => {
+    setAuthLoading(true);
+    setAuthMessage("");
+    setError("");
+
+    try {
+      const supabase = createSupabaseBrowserClient();
+      const redirectTo = `${window.location.origin}/auth/callback?next=/`;
+      const { error: authError } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo },
+      });
+
+      if (authError) {
+        throw authError;
+      }
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "Google sign-in failed.";
+      setError(message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleEmailLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAuthLoading(true);
+    setAuthMessage("");
+    setError("");
+
+    try {
+      const supabase = createSupabaseBrowserClient();
+      const emailRedirectTo = `${window.location.origin}/auth/callback?next=/`;
+      const { error: authError } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo },
+      });
+
+      if (authError) {
+        throw authError;
+      }
+
+      setAuthMessage("Magic link sent. Check your inbox and come back here after signing in.");
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "Email sign-in failed.";
+      setError(message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setAuthLoading(true);
+    setAuthMessage("");
+    setError("");
+
+    try {
+      const supabase = createSupabaseBrowserClient();
+      const { error: authError } = await supabase.auth.signOut();
+
+      if (authError) {
+        throw authError;
+      }
+
+      setUser(null);
+      setProfile(null);
+      setUsage(null);
+      setLeads([]);
+      setQuery("");
+      setSearchedPosts(0);
+      setProvider("");
+      setHasSearched(false);
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "Unable to sign out.";
+      setError(message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const activePlan = getPlanDefinition(profile?.plan);
+
   return (
     <main className="min-h-screen px-4 py-8 text-foreground sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-8">
         <section className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/5 shadow-[0_20px_80px_rgba(2,6,23,0.45)] backdrop-blur-xl">
-          <div className="grid gap-10 px-6 py-8 sm:px-8 lg:grid-cols-[1.3fr_0.7fr] lg:px-10 lg:py-10">
+          <div className="grid gap-10 px-6 py-8 sm:px-8 lg:grid-cols-[1.15fr_0.85fr] lg:px-10 lg:py-10">
             <div className="space-y-6">
               <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs font-medium tracking-[0.24em] text-cyan-100 uppercase">
                 <Radar className="h-3.5 w-3.5" />
@@ -175,9 +326,8 @@ export function SignalHunterDashboard() {
                   Hunt high-intent buyers from live social conversations.
                 </h1>
                 <p className="max-w-2xl text-base leading-7 text-slate-300 sm:text-lg">
-                  Signal Hunter searches Reddit and X, then uses Gemini to
-                  surface the posts most likely to turn into real client
-                  conversations.
+                  Signal Hunter searches Reddit and X, then uses Gemini to surface the
+                  posts most likely to turn into real client conversations.
                 </p>
               </div>
 
@@ -205,13 +355,18 @@ export function SignalHunterDashboard() {
                 </label>
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || accountLoading || !user || Boolean(configMessage)}
                   className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-300 via-sky-400 to-teal-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-70 sm:col-span-2"
                 >
                   {loading ? (
                     <>
                       <LoaderCircle className="h-4 w-4 animate-spin" />
                       Finding live opportunities
+                    </>
+                  ) : !user ? (
+                    <>
+                      <ShieldCheck className="h-4 w-4" />
+                      Sign in to unlock searches
                     </>
                   ) : (
                     <>
@@ -222,16 +377,30 @@ export function SignalHunterDashboard() {
                 </button>
               </form>
 
-              {loading ? (
-                <p className="text-sm text-slate-400">
-                  Searches usually return in under 30 seconds.
-                </p>
+              {usage ? (
+                <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/8 px-4 py-3 text-sm text-cyan-100">
+                  {usage.dailyLimit === null
+                    ? `Plan ${activePlan.name}: ${usage.monthlyRemaining} of ${usage.monthlyLimit} monthly searches left.`
+                    : `Plan ${activePlan.name}: ${usage.dailyRemaining} daily and ${usage.monthlyRemaining} monthly searches left.`}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/8 px-4 py-3 text-sm text-cyan-100">
+                  Sign in to track usage securely across browsers and devices.
+                </div>
+              )}
+
+              {authMessage ? (
+                <div className="rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+                  {authMessage}
+                </div>
               ) : null}
 
-              <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/8 px-4 py-3 text-sm text-cyan-100">
-                Free beta: {freeUsage.dailyRemaining} daily searches left and {" "}
-                {freeUsage.monthlyRemaining} monthly searches left on this browser.
-              </div>
+              {configMessage ? (
+                <div className="flex items-start gap-3 rounded-2xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <p>{configMessage}</p>
+                </div>
+              ) : null}
 
               {error ? (
                 <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
@@ -241,18 +410,96 @@ export function SignalHunterDashboard() {
               ) : null}
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
-              {stats.map((item) => (
-                <div
-                  key={item.label}
-                  className="rounded-[1.5rem] border border-white/10 bg-slate-950/55 p-5"
-                >
-                  <p className="text-sm text-slate-400">{item.label}</p>
+            <div className="space-y-4">
+              <div className="rounded-[1.5rem] border border-white/10 bg-slate-950/55 p-5">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm text-slate-400">Account</p>
+                    <p className="mt-2 text-2xl font-semibold tracking-tight text-white">
+                      {accountLoading ? "Loading..." : user?.email || "Not signed in"}
+                    </p>
+                  </div>
+                  {user ? (
+                    <button
+                      type="button"
+                      onClick={handleSignOut}
+                      disabled={authLoading}
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200 transition hover:border-cyan-300/30 hover:bg-white/8 disabled:opacity-60"
+                    >
+                      <LogOut className="h-4 w-4" />
+                      Sign out
+                    </button>
+                  ) : null}
+                </div>
+
+                {user ? (
+                  <div className="mt-5 grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+                    {stats.map((item) => (
+                      <div key={item.label} className="rounded-2xl border border-white/8 bg-slate-900/50 p-4">
+                        <p className="text-sm text-slate-400">{item.label}</p>
+                        <p className="mt-3 text-2xl font-semibold text-white">{item.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-5 space-y-4">
+                    <button
+                      type="button"
+                      onClick={handleGoogleLogin}
+                      disabled={authLoading || Boolean(configMessage)}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-sm font-medium text-white transition hover:border-cyan-300/25 hover:bg-white/8 disabled:opacity-60"
+                    >
+                      {authLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+                      Continue with Google
+                    </button>
+
+                    <form onSubmit={handleEmailLogin} className="grid gap-3">
+                      <label className="space-y-2">
+                        <span className="text-sm font-medium text-slate-200">Email magic link</span>
+                        <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                          <Mail className="h-4 w-4 text-slate-400" />
+                          <input
+                            type="email"
+                            value={email}
+                            onChange={(event) => setEmail(event.target.value)}
+                            placeholder="you@example.com"
+                            className="w-full bg-transparent text-sm text-white outline-none placeholder:text-slate-500"
+                          />
+                        </div>
+                      </label>
+                      <button
+                        type="submit"
+                        disabled={authLoading || !email || Boolean(configMessage)}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-950 transition hover:scale-[1.01] disabled:opacity-60"
+                      >
+                        {authLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                        Send magic link
+                      </button>
+                    </form>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
+                <div className="rounded-[1.5rem] border border-white/10 bg-slate-950/55 p-5">
+                  <p className="text-sm text-slate-400">Current plan</p>
                   <p className="mt-5 text-3xl font-semibold tracking-tight text-white">
-                    {item.value}
+                    {profile ? activePlan.name : "Sign in"}
                   </p>
                 </div>
-              ))}
+                <div className="rounded-[1.5rem] border border-white/10 bg-slate-950/55 p-5">
+                  <p className="text-sm text-slate-400">Monthly remaining</p>
+                  <p className="mt-5 text-3xl font-semibold tracking-tight text-white">
+                    {usage ? usage.monthlyRemaining : "--"}
+                  </p>
+                </div>
+                <div className="rounded-[1.5rem] border border-white/10 bg-slate-950/55 p-5">
+                  <p className="text-sm text-slate-400">Daily remaining</p>
+                  <p className="mt-5 text-3xl font-semibold tracking-tight text-white">
+                    {usage ? (usage.dailyRemaining ?? "Unlimited") : "--"}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -277,7 +524,7 @@ export function SignalHunterDashboard() {
           {!hasSearched ? (
             <div className="rounded-[2rem] border border-dashed border-white/10 bg-slate-950/40 px-6 py-14 text-center">
               <p className="text-lg font-medium text-white">
-                No leads yet. Start with a niche and a real pain point.
+                Sign in and start with a niche plus a real pain point.
               </p>
               <p className="mt-3 text-sm leading-6 text-slate-400">
                 Example: niche = &quot;youtube&quot;, problem = &quot;video editor&quot;.
@@ -315,29 +562,21 @@ export function SignalHunterDashboard() {
                           {lead.title}
                         </h3>
                       </div>
-                      <div
-                        className={`shrink-0 rounded-full border px-3 py-1 text-sm font-semibold ${scoreTone(
-                          lead.confidenceScore,
-                        )}`}
-                      >
+                      <div className={`shrink-0 rounded-full border px-3 py-1 text-sm font-semibold ${scoreTone(lead.confidenceScore)}`}>
                         {lead.confidenceScore}%
                       </div>
                     </div>
 
                     <div className="mt-5 grid gap-3">
                       <div className="rounded-2xl border border-white/8 bg-slate-950/45 p-4">
-                        <p className="text-[11px] font-mono uppercase tracking-[0.22em] text-slate-500">
-                          Problem
-                        </p>
+                        <p className="text-[11px] font-mono uppercase tracking-[0.22em] text-slate-500">Problem</p>
                         <p className="mt-2 text-sm leading-6 text-slate-200">
                           {conciseCopy(lead.problem, 130)}
                         </p>
                       </div>
 
                       <div className="rounded-2xl border border-white/8 bg-white/4 p-4">
-                        <p className="text-[11px] font-mono uppercase tracking-[0.22em] text-slate-500">
-                          Summary
-                        </p>
+                        <p className="text-[11px] font-mono uppercase tracking-[0.22em] text-slate-500">Summary</p>
                         <p className="mt-2 text-sm leading-6 text-slate-300">
                           {conciseCopy(lead.summary, 150)}
                         </p>
@@ -373,16 +612,15 @@ export function SignalHunterDashboard() {
                 Pricing model
               </div>
               <h2 className="mt-2 text-2xl font-semibold text-white">
-                Simple plans that match the current beta infrastructure
+                Simple plans for solo prospecting and small teams
               </h2>
             </div>
             <p className="max-w-xl text-sm leading-6 text-slate-400">
-              These caps are intentionally conservative while the product still runs
-              on free-tier APIs and hosting.
+              Built for early users. Limits are tracked securely at the account level across browsers and devices.
             </p>
           </div>
 
-          <div className="grid gap-5 lg:grid-cols-4">
+          <div className="grid gap-5 lg:grid-cols-3">
             {PRICING_PLANS.map((plan) => {
               const isFeatured = plan.id === "pro";
 
@@ -409,9 +647,7 @@ export function SignalHunterDashboard() {
                     ) : null}
                   </div>
 
-                  <p className="mt-5 text-3xl font-semibold tracking-tight text-white">
-                    {plan.priceLabel}
-                  </p>
+                  <p className="mt-5 text-3xl font-semibold tracking-tight text-white">{plan.priceLabel}</p>
                   <p className="mt-2 text-sm text-cyan-100">{plan.searchesPerMonth}</p>
                   <p className="mt-4 text-sm leading-6 text-slate-300">{plan.tagline}</p>
 
@@ -433,83 +669,51 @@ export function SignalHunterDashboard() {
       </div>
     </main>
   );
-}
 
-function readFreeUsage(now = new Date()): FreeUsageState {
-  if (typeof window === "undefined") {
-    return {
-      dailyUsed: 0,
-      monthlyUsed: 0,
-      dailyRemaining: FREE_PLAN_LIMITS.dailySearches,
-      monthlyRemaining: FREE_PLAN_LIMITS.monthlySearches,
-      limitReached: false,
-    };
-  }
+  async function loadAccount(stillMounted: boolean) {
+    try {
+      const response = await fetch("/api/account", { cache: "no-store" });
+      const data = (await response.json()) as AccountResponse;
 
-  const todayKey = now.toISOString().slice(0, 10);
-  const monthKey = todayKey.slice(0, 7);
+      if (!response.ok) {
+        if (stillMounted) {
+          setConfigMessage(data.error || "Unable to load account details.");
+        }
+        return;
+      }
 
-  try {
-    const raw = window.localStorage.getItem(FREE_PLAN_STORAGE_KEY);
+      if (!stillMounted) {
+        return;
+      }
 
-    if (!raw) {
-      return {
-        dailyUsed: 0,
-        monthlyUsed: 0,
-        dailyRemaining: FREE_PLAN_LIMITS.dailySearches,
-        monthlyRemaining: FREE_PLAN_LIMITS.monthlySearches,
-        limitReached: false,
-      };
+      if (!data.user) {
+        setProfile(null);
+        setUsage(null);
+        setAccountLoading(false);
+        return;
+      }
+
+      setProfile(data.profile || null);
+      setUsage(data.usage || null);
+      setConfigMessage("");
+    } catch (caughtError) {
+      if (stillMounted) {
+        const message =
+          caughtError instanceof Error ? caughtError.message : "Unable to load account details.";
+        setConfigMessage(message);
+      }
+    } finally {
+      if (stillMounted) {
+        setAccountLoading(false);
+      }
     }
-
-    const parsed = JSON.parse(raw) as {
-      day?: string;
-      dayCount?: number;
-      month?: string;
-      monthCount?: number;
-    };
-
-    const dailyUsed = parsed.day === todayKey ? parsed.dayCount || 0 : 0;
-    const monthlyUsed = parsed.month === monthKey ? parsed.monthCount || 0 : 0;
-    const dailyRemaining = Math.max(0, FREE_PLAN_LIMITS.dailySearches - dailyUsed);
-    const monthlyRemaining = Math.max(0, FREE_PLAN_LIMITS.monthlySearches - monthlyUsed);
-
-    return {
-      dailyUsed,
-      monthlyUsed,
-      dailyRemaining,
-      monthlyRemaining,
-      limitReached: dailyRemaining === 0 || monthlyRemaining === 0,
-    };
-  } catch {
-    return {
-      dailyUsed: 0,
-      monthlyUsed: 0,
-      dailyRemaining: FREE_PLAN_LIMITS.dailySearches,
-      monthlyRemaining: FREE_PLAN_LIMITS.monthlySearches,
-      limitReached: false,
-    };
   }
 }
 
-function incrementFreeUsage() {
-  if (typeof window === "undefined") {
-    return readFreeUsage();
+function buildLimitMessage(usage: UsageSnapshot) {
+  if (usage.dailyLimit !== null && usage.dailyRemaining === 0) {
+    return `You have used all ${usage.dailyLimit} daily searches on your ${usage.planId} plan.`;
   }
 
-  const now = new Date();
-  const todayKey = now.toISOString().slice(0, 10);
-  const monthKey = todayKey.slice(0, 7);
-  const current = readFreeUsage(now);
-
-  const next = {
-    day: todayKey,
-    dayCount: current.dailyUsed + 1,
-    month: monthKey,
-    monthCount: current.monthlyUsed + 1,
-  };
-
-  window.localStorage.setItem(FREE_PLAN_STORAGE_KEY, JSON.stringify(next));
-
-  return readFreeUsage(now);
+  return `You have used all ${usage.monthlyLimit} monthly searches on your ${usage.planId} plan.`;
 }

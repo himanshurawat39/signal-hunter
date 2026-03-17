@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { ensureProfile, getUsageSnapshot, recordUsage } from "@/lib/usage";
+import { hasSupabaseEnv } from "@/lib/supabase/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +50,45 @@ const MIN_STRONG_RESULTS = 3;
 
 export async function POST(request: Request) {
   try {
+    if (!hasSupabaseEnv()) {
+      return NextResponse.json(
+        { error: "Supabase is not configured yet. Add your Supabase environment variables first." },
+        { status: 503 },
+      );
+    }
+
+    const supabase = await createSupabaseServerClient();
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: "Please sign in to search for leads." },
+        { status: 401 },
+      );
+    }
+
+    const profile = await ensureProfile({ id: user.id, email: user.email });
+    const usageBefore = await getUsageSnapshot(user.id, profile.plan);
+
+    if (!usageBefore.canSearch) {
+      const dailyMessage =
+        usageBefore.dailyLimit === null
+          ? ""
+          : ` Daily limit: ${usageBefore.dailyLimit}.`;
+
+      return NextResponse.json(
+        {
+          error: `You have reached your ${profile.plan} plan limit.${dailyMessage} Monthly limit: ${usageBefore.monthlyLimit}.`,
+          profile,
+          usage: usageBefore,
+        },
+        { status: 429 },
+      );
+    }
+
     const body = (await request.json()) as { niche?: string; problem?: string };
     const niche = body.niche?.trim();
     const problem = body.problem?.trim();
@@ -60,25 +102,33 @@ export async function POST(request: Request) {
 
     const query = `${niche} ${problem}`;
     const searchResponse = await searchSocialPosts(niche, problem);
+    const provider = activeSearchProvider();
 
-    if (searchResponse.results.length === 0) {
-      return NextResponse.json({
-        leads: [],
-        provider: activeSearchProvider(),
-        query,
-        searchedPosts: 0,
-        matchMode: searchResponse.matchMode,
-      });
-    }
+    const leads =
+      searchResponse.results.length === 0
+        ? []
+        : await buildLeads(query, searchResponse.results);
 
-    const leads = await buildLeads(query, searchResponse.results);
+    await recordUsage({
+      userId: user.id,
+      niche,
+      problem,
+      query,
+      provider,
+      matchMode: searchResponse.matchMode,
+      resultCount: searchResponse.results.length,
+    });
+
+    const usage = await getUsageSnapshot(user.id, profile.plan);
 
     return NextResponse.json({
       leads,
-      provider: activeSearchProvider(),
+      provider,
       query,
       searchedPosts: searchResponse.results.length,
       matchMode: searchResponse.matchMode,
+      profile,
+      usage,
     });
   } catch (error) {
     const message =
@@ -238,7 +288,7 @@ async function searchWithTavily(
 
   return {
     results: related,
-    matchMode: primary.length > 0 ? "related" : "related",
+    matchMode: "related",
   };
 }
 
@@ -331,7 +381,7 @@ async function searchWithFirecrawl(
 
   return {
     results: related,
-    matchMode: primary.length > 0 ? "related" : "related",
+    matchMode: "related",
   };
 }
 

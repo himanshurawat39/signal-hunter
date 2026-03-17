@@ -1,22 +1,21 @@
+export type PlanId = "free" | "pro" | "agency";
+
 export type PlanDefinition = {
-  id: string;
+  id: PlanId;
   name: string;
   priceLabel: string;
   searchesPerMonth: string;
   audience: string;
   tagline: string;
   highlights: string[];
+  monthlySearchLimit: number;
+  dailySearchLimit: number | null;
 };
 
-export const FREE_PLAN_STORAGE_KEY = "signal-hunter-free-usage-v1";
+export const DEFAULT_PLAN_ID: PlanId = "free";
 
-export const FREE_PLAN_LIMITS = {
-  dailySearches: 2,
-  monthlySearches: 40,
-} as const;
-
-export const PRICING_PLANS: PlanDefinition[] = [
-  {
+export const PLAN_DEFINITIONS: Record<PlanId, PlanDefinition> = {
+  free: {
     id: "free",
     name: "Free",
     priceLabel: "Rs 0 / month",
@@ -27,10 +26,12 @@ export const PRICING_PLANS: PlanDefinition[] = [
       "2 searches per day",
       "40 searches per month",
       "Live Reddit and X discovery",
-      "Gemini-ranked results",
+      "AI-ranked results",
     ],
+    monthlySearchLimit: 40,
+    dailySearchLimit: 2,
   },
-  {
+  pro: {
     id: "pro",
     name: "Pro",
     priceLabel: "Rs 799 / month",
@@ -40,11 +41,13 @@ export const PRICING_PLANS: PlanDefinition[] = [
     highlights: [
       "120 searches per month",
       "Best fit for 1 to 3 niches",
-      "Priority over free users",
+      "Faster workflow",
       "Email support",
     ],
+    monthlySearchLimit: 120,
+    dailySearchLimit: null,
   },
-  {
+  agency: {
     id: "agency",
     name: "Agency",
     priceLabel: "Rs 1,999 / month",
@@ -57,5 +60,17 @@ export const PRICING_PLANS: PlanDefinition[] = [
       "Room for multiple client niches",
       "Best value before custom plans",
     ],
+    monthlySearchLimit: 500,
+    dailySearchLimit: null,
   },
-];
+};
+
+export const PRICING_PLANS = Object.values(PLAN_DEFINITIONS);
+
+export function getPlanDefinition(planId: string | null | undefined): PlanDefinition {
+  if (!planId || !(planId in PLAN_DEFINITIONS)) {
+    return PLAN_DEFINITIONS[DEFAULT_PLAN_ID];
+  }
+
+  return PLAN_DEFINITIONS[planId as PlanId];
+}

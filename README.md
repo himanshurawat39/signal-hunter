@@ -1,6 +1,6 @@
 # Signal Hunter
 
-Signal Hunter is a dark-themed lead discovery app built with Next.js, Tailwind CSS, Lucide, and a Vercel-friendly serverless API route. It searches Reddit and X for recent pain-point posts, then asks Gemini to rank the highest-intent opportunities.
+Signal Hunter is a lead discovery app built with Next.js, Supabase Auth, Tailwind CSS, Lucide, and a Vercel-friendly serverless API route. It searches Reddit and X for recent pain-point posts, then asks Gemini to rank the highest-intent opportunities.
 
 ## Environment variables
 
@@ -11,9 +11,24 @@ TAVILY_API_KEY=...
 FIRECRAWL_API_KEY=...
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-2.5-flash
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=...
 ```
 
 Use either `TAVILY_API_KEY` or `FIRECRAWL_API_KEY` for the search layer. If both are present, the app prefers Tavily.
+
+## Supabase setup
+
+1. Create a Supabase project.
+2. In Supabase SQL Editor, run the SQL in `supabase/schema.sql`.
+3. In Supabase Authentication:
+   - enable Google provider if you want Google login
+   - keep Email provider enabled for magic links
+4. Add your app URL and callback URL to Supabase Auth settings.
+   - Local callback: `http://localhost:3000/auth/callback`
+   - Production callback: `https://your-domain.com/auth/callback`
+5. Add the Supabase project URL, anon key, and service role key to `.env.local` and Vercel.
 
 ## Local development
 
@@ -23,6 +38,16 @@ npm run dev
 ```
 
 Open `http://localhost:3000`.
+
+## Plans and limits
+
+Current plan limits:
+
+- Free: `2/day`, `40/month`
+- Pro: `120/month`
+- Agency: `500/month`
+
+These limits are enforced server-side per authenticated user through Supabase-backed usage tracking.
 
 ## Git workflow
 
@@ -44,8 +69,8 @@ Common `type` values:
 Examples:
 
 ```text
-feat(api): rank leads with Gemini
-fix(ui): prevent empty search submissions
+feat(auth): add supabase login flow
+fix(api): block over-limit searches
 docs(readme): add deployment notes
 ```
 
@@ -59,4 +84,4 @@ Then `git commit` will open with a starter structure you can fill in.
 
 ## Deployment
 
-Deploy directly to Vercel. The `/api/leads` route runs as a serverless function, so you do not need a separate backend server.
+Deploy directly to Vercel. The `/api/leads` and `/api/account` routes run as serverless functions, so you do not need a separate backend server.
