@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -10,6 +10,11 @@ import {
   Sparkles,
   Target,
 } from "lucide-react";
+import {
+  FREE_PLAN_LIMITS,
+  FREE_PLAN_STORAGE_KEY,
+  PRICING_PLANS,
+} from "@/lib/pricing";
 
 type Lead = {
   title: string;
@@ -31,6 +36,14 @@ type ApiResponse = {
 
 type ApiError = {
   error?: string;
+};
+
+type FreeUsageState = {
+  dailyUsed: number;
+  monthlyUsed: number;
+  dailyRemaining: number;
+  monthlyRemaining: number;
+  limitReached: boolean;
 };
 
 const REQUEST_TIMEOUT_MS = 30000;
@@ -68,6 +81,17 @@ export function SignalHunterDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
+  const [freeUsage, setFreeUsage] = useState<FreeUsageState>({
+    dailyUsed: 0,
+    monthlyUsed: 0,
+    dailyRemaining: FREE_PLAN_LIMITS.dailySearches,
+    monthlyRemaining: FREE_PLAN_LIMITS.monthlySearches,
+    limitReached: false,
+  });
+
+  useEffect(() => {
+    setFreeUsage(readFreeUsage());
+  }, []);
 
   const stats = useMemo(
     () => [
@@ -80,6 +104,18 @@ export function SignalHunterDashboard() {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    const usage = readFreeUsage();
+    setFreeUsage(usage);
+
+    if (usage.limitReached) {
+      setHasSearched(true);
+      setError(
+        `Free beta is capped at ${FREE_PLAN_LIMITS.dailySearches} searches per day and ${FREE_PLAN_LIMITS.monthlySearches} searches per month on this browser. Upgrade to keep prospecting.`,
+      );
+      return;
+    }
+
     setLoading(true);
     setError("");
     setHasSearched(true);
@@ -109,6 +145,7 @@ export function SignalHunterDashboard() {
       setSearchedPosts(data.searchedPosts);
       setQuery(data.query);
       setMatchMode(data.matchMode || "exact");
+      setFreeUsage(incrementFreeUsage());
     } catch (caughtError) {
       const message =
         caughtError instanceof DOMException && caughtError.name === "AbortError"
@@ -191,6 +228,11 @@ export function SignalHunterDashboard() {
                 </p>
               ) : null}
 
+              <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/8 px-4 py-3 text-sm text-cyan-100">
+                Free beta: {freeUsage.dailyRemaining} daily searches left and {" "}
+                {freeUsage.monthlyRemaining} monthly searches left on this browser.
+              </div>
+
               {error ? (
                 <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -259,70 +301,215 @@ export function SignalHunterDashboard() {
                 </div>
               ) : null}
               <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-              {leads.map((lead) => (
-                <article
-                  key={`${lead.url}-${lead.title}`}
-                  className="group flex h-full flex-col rounded-[1.9rem] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.07),rgba(255,255,255,0.03))] p-6 shadow-[0_18px_50px_rgba(2,6,23,0.22)] backdrop-blur-sm transition hover:-translate-y-1 hover:border-cyan-300/25 hover:shadow-[0_24px_70px_rgba(8,145,178,0.12)]"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">
-                        {lead.platform}
-                      </p>
-                      <h3 className="mt-3 text-lg leading-7 font-semibold text-white sm:text-xl">
-                        {lead.title}
-                      </h3>
-                    </div>
-                    <div
-                      className={`shrink-0 rounded-full border px-3 py-1 text-sm font-semibold ${scoreTone(
-                        lead.confidenceScore,
-                      )}`}
-                    >
-                      {lead.confidenceScore}%
-                    </div>
-                  </div>
-
-                  <div className="mt-5 grid gap-3">
-                    <div className="rounded-2xl border border-white/8 bg-slate-950/45 p-4">
-                      <p className="text-[11px] font-mono uppercase tracking-[0.22em] text-slate-500">
-                        Problem
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-slate-200">
-                        {conciseCopy(lead.problem, 130)}
-                      </p>
+                {leads.map((lead) => (
+                  <article
+                    key={`${lead.url}-${lead.title}`}
+                    className="group flex h-full flex-col rounded-[1.9rem] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.07),rgba(255,255,255,0.03))] p-6 shadow-[0_18px_50px_rgba(2,6,23,0.22)] backdrop-blur-sm transition hover:-translate-y-1 hover:border-cyan-300/25 hover:shadow-[0_24px_70px_rgba(8,145,178,0.12)]"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-slate-400">
+                          {lead.platform}
+                        </p>
+                        <h3 className="mt-3 text-lg leading-7 font-semibold text-white sm:text-xl">
+                          {lead.title}
+                        </h3>
+                      </div>
+                      <div
+                        className={`shrink-0 rounded-full border px-3 py-1 text-sm font-semibold ${scoreTone(
+                          lead.confidenceScore,
+                        )}`}
+                      >
+                        {lead.confidenceScore}%
+                      </div>
                     </div>
 
-                    <div className="rounded-2xl border border-white/8 bg-white/4 p-4">
-                      <p className="text-[11px] font-mono uppercase tracking-[0.22em] text-slate-500">
-                        Summary
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-slate-300">
-                        {conciseCopy(lead.summary, 150)}
-                      </p>
-                    </div>
-                  </div>
+                    <div className="mt-5 grid gap-3">
+                      <div className="rounded-2xl border border-white/8 bg-slate-950/45 p-4">
+                        <p className="text-[11px] font-mono uppercase tracking-[0.22em] text-slate-500">
+                          Problem
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-slate-200">
+                          {conciseCopy(lead.problem, 130)}
+                        </p>
+                      </div>
 
-                  <div className="mt-5 flex items-center justify-between gap-4 border-t border-white/8 pt-4">
-                    <p className="line-clamp-2 text-xs leading-5 text-slate-400">
-                      {conciseCopy(lead.rationale, 110)}
-                    </p>
-                    <a
-                      href={lead.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex shrink-0 items-center gap-2 rounded-full border border-cyan-300/15 bg-cyan-300/8 px-3 py-2 text-sm font-medium text-cyan-100 transition group-hover:border-cyan-300/30 group-hover:bg-cyan-300/12"
-                    >
-                      Open post
-                      <ArrowUpRight className="h-4 w-4" />
-                    </a>
-                  </div>
-                </article>
-              ))}
+                      <div className="rounded-2xl border border-white/8 bg-white/4 p-4">
+                        <p className="text-[11px] font-mono uppercase tracking-[0.22em] text-slate-500">
+                          Summary
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">
+                          {conciseCopy(lead.summary, 150)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 flex items-center justify-between gap-4 border-t border-white/8 pt-4">
+                      <p className="line-clamp-2 text-xs leading-5 text-slate-400">
+                        {conciseCopy(lead.rationale, 110)}
+                      </p>
+                      <a
+                        href={lead.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex shrink-0 items-center gap-2 rounded-full border border-cyan-300/15 bg-cyan-300/8 px-3 py-2 text-sm font-medium text-cyan-100 transition group-hover:border-cyan-300/30 group-hover:bg-cyan-300/12"
+                      >
+                        Open post
+                        <ArrowUpRight className="h-4 w-4" />
+                      </a>
+                    </div>
+                  </article>
+                ))}
               </div>
             </>
           )}
         </section>
+
+        <section className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <div className="inline-flex items-center gap-2 text-sm text-cyan-100">
+                <Sparkles className="h-4 w-4" />
+                Pricing model
+              </div>
+              <h2 className="mt-2 text-2xl font-semibold text-white">
+                Simple plans that match the current beta infrastructure
+              </h2>
+            </div>
+            <p className="max-w-xl text-sm leading-6 text-slate-400">
+              These caps are intentionally conservative while the product still runs
+              on free-tier APIs and hosting.
+            </p>
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-4">
+            {PRICING_PLANS.map((plan) => {
+              const isFeatured = plan.id === "pro";
+
+              return (
+                <article
+                  key={plan.id}
+                  className={`rounded-[1.9rem] border p-6 shadow-[0_18px_50px_rgba(2,6,23,0.18)] backdrop-blur-sm ${
+                    isFeatured
+                      ? "border-cyan-300/30 bg-cyan-300/10"
+                      : "border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.07),rgba(255,255,255,0.03))]"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-[11px] font-mono uppercase tracking-[0.24em] text-slate-400">
+                        {plan.audience}
+                      </p>
+                      <h3 className="mt-3 text-2xl font-semibold text-white">{plan.name}</h3>
+                    </div>
+                    {isFeatured ? (
+                      <span className="rounded-full border border-cyan-300/30 bg-cyan-300/15 px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-cyan-100">
+                        Best launch plan
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <p className="mt-5 text-3xl font-semibold tracking-tight text-white">
+                    {plan.priceLabel}
+                  </p>
+                  <p className="mt-2 text-sm text-cyan-100">{plan.searchesPerMonth}</p>
+                  <p className="mt-4 text-sm leading-6 text-slate-300">{plan.tagline}</p>
+
+                  <div className="mt-5 grid gap-3">
+                    {plan.highlights.map((highlight) => (
+                      <div
+                        key={highlight}
+                        className="rounded-2xl border border-white/8 bg-slate-950/35 px-4 py-3 text-sm text-slate-200"
+                      >
+                        {highlight}
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
       </div>
     </main>
   );
+}
+
+function readFreeUsage(now = new Date()): FreeUsageState {
+  if (typeof window === "undefined") {
+    return {
+      dailyUsed: 0,
+      monthlyUsed: 0,
+      dailyRemaining: FREE_PLAN_LIMITS.dailySearches,
+      monthlyRemaining: FREE_PLAN_LIMITS.monthlySearches,
+      limitReached: false,
+    };
+  }
+
+  const todayKey = now.toISOString().slice(0, 10);
+  const monthKey = todayKey.slice(0, 7);
+
+  try {
+    const raw = window.localStorage.getItem(FREE_PLAN_STORAGE_KEY);
+
+    if (!raw) {
+      return {
+        dailyUsed: 0,
+        monthlyUsed: 0,
+        dailyRemaining: FREE_PLAN_LIMITS.dailySearches,
+        monthlyRemaining: FREE_PLAN_LIMITS.monthlySearches,
+        limitReached: false,
+      };
+    }
+
+    const parsed = JSON.parse(raw) as {
+      day?: string;
+      dayCount?: number;
+      month?: string;
+      monthCount?: number;
+    };
+
+    const dailyUsed = parsed.day === todayKey ? parsed.dayCount || 0 : 0;
+    const monthlyUsed = parsed.month === monthKey ? parsed.monthCount || 0 : 0;
+    const dailyRemaining = Math.max(0, FREE_PLAN_LIMITS.dailySearches - dailyUsed);
+    const monthlyRemaining = Math.max(0, FREE_PLAN_LIMITS.monthlySearches - monthlyUsed);
+
+    return {
+      dailyUsed,
+      monthlyUsed,
+      dailyRemaining,
+      monthlyRemaining,
+      limitReached: dailyRemaining === 0 || monthlyRemaining === 0,
+    };
+  } catch {
+    return {
+      dailyUsed: 0,
+      monthlyUsed: 0,
+      dailyRemaining: FREE_PLAN_LIMITS.dailySearches,
+      monthlyRemaining: FREE_PLAN_LIMITS.monthlySearches,
+      limitReached: false,
+    };
+  }
+}
+
+function incrementFreeUsage() {
+  if (typeof window === "undefined") {
+    return readFreeUsage();
+  }
+
+  const now = new Date();
+  const todayKey = now.toISOString().slice(0, 10);
+  const monthKey = todayKey.slice(0, 7);
+  const current = readFreeUsage(now);
+
+  const next = {
+    day: todayKey,
+    dayCount: current.dailyUsed + 1,
+    month: monthKey,
+    monthCount: current.monthlyUsed + 1,
+  };
+
+  window.localStorage.setItem(FREE_PLAN_STORAGE_KEY, JSON.stringify(next));
+
+  return readFreeUsage(now);
 }
