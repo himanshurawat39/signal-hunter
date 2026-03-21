@@ -6,6 +6,9 @@ export type AccountProfile = {
   id: string;
   email: string | null;
   plan: PlanId;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  subscription_status: string | null;
 };
 
 export type UsageSnapshot = {
@@ -19,11 +22,14 @@ export type UsageSnapshot = {
   canSearch: boolean;
 };
 
+const PROFILE_COLUMNS =
+  "id,email,plan,stripe_customer_id,stripe_subscription_id,subscription_status";
+
 export async function ensureProfile(user: { id: string; email?: string | null }) {
   const admin = createSupabaseAdminClient();
   const existing = await admin
     .from("profiles")
-    .select("id,email,plan")
+    .select(PROFILE_COLUMNS)
     .eq("id", user.id)
     .maybeSingle();
 
@@ -40,10 +46,13 @@ export async function ensureProfile(user: { id: string; email?: string | null })
             id: user.id,
             email: user.email ?? null,
             plan,
+            stripe_customer_id: existing.data.stripe_customer_id,
+            stripe_subscription_id: existing.data.stripe_subscription_id,
+            subscription_status: existing.data.subscription_status,
           },
           { onConflict: "id" },
         )
-        .select("id,email,plan")
+        .select(PROFILE_COLUMNS)
         .single();
 
       throwIfSchemaMissing(updated.error);
@@ -60,7 +69,7 @@ export async function ensureProfile(user: { id: string; email?: string | null })
       email: user.email ?? null,
       plan: DEFAULT_PLAN_ID,
     })
-    .select("id,email,plan")
+    .select(PROFILE_COLUMNS)
     .single();
 
   throwIfSchemaMissing(created.error);
@@ -139,6 +148,60 @@ export async function recordUsage(input: {
   });
 
   throwIfSchemaMissing(result.error);
+}
+
+export async function updateProfileBilling(input: {
+  userId: string;
+  email?: string | null;
+  plan: PlanId;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+  subscriptionStatus?: string | null;
+}) {
+  const admin = createSupabaseAdminClient();
+  const result = await admin
+    .from("profiles")
+    .upsert(
+      {
+        id: input.userId,
+        email: input.email ?? null,
+        plan: input.plan,
+        stripe_customer_id: input.stripeCustomerId ?? null,
+        stripe_subscription_id: input.stripeSubscriptionId ?? null,
+        subscription_status: input.subscriptionStatus ?? null,
+      },
+      { onConflict: "id" },
+    )
+    .select(PROFILE_COLUMNS)
+    .single();
+
+  throwIfSchemaMissing(result.error);
+
+  return result.data as AccountProfile;
+}
+
+export async function findProfileByStripeCustomerId(customerId: string) {
+  const admin = createSupabaseAdminClient();
+  const result = await admin
+    .from("profiles")
+    .select(PROFILE_COLUMNS)
+    .eq("stripe_customer_id", customerId)
+    .maybeSingle();
+
+  throwIfSchemaMissing(result.error);
+  return result.data as AccountProfile | null;
+}
+
+export async function findProfileByStripeSubscriptionId(subscriptionId: string) {
+  const admin = createSupabaseAdminClient();
+  const result = await admin
+    .from("profiles")
+    .select(PROFILE_COLUMNS)
+    .eq("stripe_subscription_id", subscriptionId)
+    .maybeSingle();
+
+  throwIfSchemaMissing(result.error);
+  return result.data as AccountProfile | null;
 }
 
 function throwIfSchemaMissing(error: PostgrestError | null) {

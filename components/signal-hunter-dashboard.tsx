@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowUpRight,
+  CreditCard,
   LoaderCircle,
   LogOut,
   Mail,
@@ -99,6 +100,7 @@ export function SignalHunterDashboard() {
   const [hasSearched, setHasSearched] = useState(false);
   const [email, setEmail] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+  const [billingLoadingPlan, setBillingLoadingPlan] = useState<PlanId | "portal" | null>(null);
   const [authMessage, setAuthMessage] = useState("");
   const [accountLoading, setAccountLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
@@ -306,6 +308,58 @@ export function SignalHunterDashboard() {
       setError(message);
     } finally {
       setAuthLoading(false);
+    }
+  };
+
+  const handleCheckout = async (planId: Exclude<PlanId, "free">) => {
+    setBillingLoadingPlan(planId);
+    setAuthMessage("");
+    setError("");
+
+    try {
+      const response = await fetch("/api/billing/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planId }),
+      });
+
+      const data = (await response.json()) as { url?: string; error?: string };
+
+      if (!response.ok || !data.url) {
+        throw new Error(data.error || "Unable to start checkout.");
+      }
+
+      window.location.href = data.url;
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "Unable to start checkout.";
+      setError(message);
+      setBillingLoadingPlan(null);
+    }
+  };
+
+  const handleBillingPortal = async () => {
+    setBillingLoadingPlan("portal");
+    setAuthMessage("");
+    setError("");
+
+    try {
+      const response = await fetch("/api/billing/portal", {
+        method: "POST",
+      });
+
+      const data = (await response.json()) as { url?: string; error?: string };
+
+      if (!response.ok || !data.url) {
+        throw new Error(data.error || "Unable to open billing portal.");
+      }
+
+      window.location.href = data.url;
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error ? caughtError.message : "Unable to open billing portal.";
+      setError(message);
+      setBillingLoadingPlan(null);
     }
   };
 
@@ -661,6 +715,54 @@ export function SignalHunterDashboard() {
                       </div>
                     ))}
                   </div>
+
+                  <div className="mt-6">
+                    {plan.id === "free" ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="inline-flex w-full items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-300 opacity-80"
+                      >
+                        {profile?.plan === plan.id ? "Current plan" : "Free tier"}
+                      </button>
+                    ) : !user ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="inline-flex w-full items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-300 opacity-80"
+                      >
+                        Sign in to upgrade
+                      </button>
+                    ) : profile?.plan === plan.id ? (
+                      <button
+                        type="button"
+                        onClick={handleBillingPortal}
+                        disabled={billingLoadingPlan !== null}
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-cyan-300/20 bg-cyan-300/12 px-4 py-3 text-sm font-semibold text-cyan-50 transition hover:bg-cyan-300/16 disabled:opacity-60"
+                      >
+                        {billingLoadingPlan === "portal" ? (
+                          <LoaderCircle className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <CreditCard className="h-4 w-4" />
+                        )}
+                        Manage billing
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleCheckout(plan.id as Exclude<PlanId, "free">)}
+                        disabled={billingLoadingPlan !== null}
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-950 transition hover:scale-[1.01] disabled:opacity-60"
+                      >
+                        {billingLoadingPlan === plan.id ? (
+                          <LoaderCircle className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <CreditCard className="h-4 w-4" />
+                        )}
+                        Upgrade to {plan.name}
+                      </button>
+                    )}
+                  </div>
                 </article>
               );
             })}
@@ -717,3 +819,16 @@ function buildLimitMessage(usage: UsageSnapshot) {
 
   return `You have used all ${usage.monthlyLimit} monthly searches on your ${usage.planId} plan.`;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
