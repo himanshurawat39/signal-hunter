@@ -1,6 +1,6 @@
 # Signal Hunter
 
-Signal Hunter is a lead discovery app built with Next.js, Supabase Auth, Stripe Billing, Tailwind CSS, Lucide, and Vercel-friendly serverless API routes. It searches Reddit and X for recent pain-point posts, then asks Gemini to rank the highest-intent opportunities.
+Signal Hunter is a lead discovery app built with Next.js, Supabase Auth, Tailwind CSS, Lucide, and Vercel-friendly serverless API routes. It searches Reddit and X for recent pain-point posts, then asks Gemini to rank the highest-intent opportunities.
 
 ## Environment variables
 
@@ -14,10 +14,15 @@ GEMINI_MODEL=gemini-2.5-flash
 NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
-STRIPE_SECRET_KEY=...
-STRIPE_WEBHOOK_SECRET=...
-STRIPE_PRICE_PRO_MONTHLY=...
-STRIPE_PRICE_AGENCY_MONTHLY=...
+NEXT_PUBLIC_SUPPORT_EMAIL=...
+NEXT_PUBLIC_COMPANY_NAME=...
+NEXT_PUBLIC_COMPANY_ADDRESS=...
+NEXT_PUBLIC_APP_URL=...
+RAZORPAY_KEY_ID=...
+RAZORPAY_KEY_SECRET=...
+RAZORPAY_WEBHOOK_SECRET=...
+RAZORPAY_PLAN_PRO_MONTHLY=...
+RAZORPAY_PLAN_AGENCY_MONTHLY=...
 ```
 
 Use either `TAVILY_API_KEY` or `FIRECRAWL_API_KEY` for the search layer. If both are present, the app prefers Tavily.
@@ -36,27 +41,38 @@ Use either `TAVILY_API_KEY` or `FIRECRAWL_API_KEY` for the search layer. If both
    - Production callbacks: `https://your-domain.com/auth/callback` and `https://your-domain.com/**`
 5. Add the Supabase project URL, anon key, and service role key to `.env.local` and Vercel.
 
-## Stripe setup
+## Business pages for payment onboarding
 
-1. Create two recurring monthly prices in Stripe:
+The app now includes these pages for payment-provider review:
+
+- `/privacy-policy`
+- `/terms`
+- `/refund-policy`
+- `/shipping-delivery`
+- `/contact`
+
+Before applying for live payments, update the support email, company name, business address, and production app URL in your environment so these pages show your real business details.
+
+## Razorpay prep
+
+Razorpay usually expects the business website to include clear legal and support information before payment activation or international-card approval. The project now includes the required pages and placeholders for these future Razorpay values:
+
+- `RAZORPAY_KEY_ID`
+- `RAZORPAY_KEY_SECRET`
+- `RAZORPAY_WEBHOOK_SECRET`
+- `RAZORPAY_PLAN_PRO_MONTHLY`
+- `RAZORPAY_PLAN_AGENCY_MONTHLY`
+
+Suggested next Razorpay steps:
+
+1. Create a Razorpay account and complete KYC.
+2. Add your production site URL in Razorpay website settings.
+3. Ensure the legal pages above are live on your production domain.
+4. Create two recurring monthly plans in Razorpay:
    - Pro
    - Agency
-2. Copy the Stripe price IDs into:
-   - `STRIPE_PRICE_PRO_MONTHLY`
-   - `STRIPE_PRICE_AGENCY_MONTHLY`
-3. Add your Stripe secret key to:
-   - `STRIPE_SECRET_KEY`
-4. Create a webhook endpoint in Stripe that points to:
-   - Local: `http://localhost:3001/api/billing/webhook`
-   - Production: `https://your-domain.com/api/billing/webhook`
-5. Subscribe the webhook to these events:
-   - `checkout.session.completed`
-   - `customer.subscription.created`
-   - `customer.subscription.updated`
-   - `customer.subscription.deleted`
-6. Copy the webhook signing secret into:
-   - `STRIPE_WEBHOOK_SECRET`
-7. Add all Stripe env vars to Vercel as well.
+5. Save the resulting plan IDs into the two `RAZORPAY_PLAN_*` env vars.
+6. Create a webhook in Razorpay and copy the secret into `RAZORPAY_WEBHOOK_SECRET`.
 
 ## Local development
 
@@ -75,7 +91,7 @@ Current plan limits:
 - Pro: `120/month`
 - Agency: `500/month`
 
-These limits are enforced server-side per authenticated user through Supabase-backed usage tracking. Paid upgrades are handled through Stripe Checkout and managed through the Stripe Billing Portal.
+These limits are enforced server-side per authenticated user through Supabase-backed usage tracking.
 
 ## Git workflow
 
@@ -97,9 +113,9 @@ Common `type` values:
 Examples:
 
 ```text
-feat(billing): add stripe checkout flow
+feat(legal): add payment-provider policy pages
 fix(auth): handle root callback codes
-docs(readme): add deployment notes
+docs(readme): add onboarding notes
 ```
 
 This repository includes a local Git commit template in `.gitmessage.txt`. To enable it for this clone:
@@ -112,4 +128,4 @@ Then `git commit` will open with a starter structure you can fill in.
 
 ## Deployment
 
-Deploy directly to Vercel. The `/api/account`, `/api/billing/*`, and `/api/leads` routes run as serverless functions, so you do not need a separate backend server.
+Deploy directly to Vercel. The `/api/account` and `/api/leads` routes run as serverless functions, so you do not need a separate backend server.
